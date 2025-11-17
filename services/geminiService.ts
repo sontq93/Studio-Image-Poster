@@ -1,11 +1,8 @@
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import type { ImageFile, ModelSelection, ImageQuality } from '../types';
 
-const API_KEY = process.env.API_KEY;
-if (!API_KEY) {
-  throw new Error("API_KEY environment variable is not set");
-}
-const ai = new GoogleGenAI({ apiKey: API_KEY });
+// FIX: The API key must be obtained exclusively from `process.env.API_KEY` and used directly in the `GoogleGenAI` constructor as per the coding guidelines. This also resolves the TypeScript error regarding `import.meta.env`.
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const fileToGenerativePart = (base64: string, mimeType: string) => {
   return {
