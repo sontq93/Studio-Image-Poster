@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Studio Ảnh Thương Hiệu AI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+      body {
+        font-family: 'Inter', sans-serif;
+        background-image: radial-gradient(ellipse at top, rgba(107, 33, 168, 0.1), transparent 70%);
+        background-attachment: fixed;
+      }
+      /* Custom scrollbar for a more modern look */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #1e293b; /* slate-800 */
+      }
+      ::-webkit-scrollbar-thumb {
+        background-color: #4f46e5; /* indigo-600 */
+        border-radius: 10px;
+        border: 2px solid #1e293b;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.29.1",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/"
+  }
+}
+</script>
+</head>
+  <body class="bg-slate-900 text-gray-200">
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>
