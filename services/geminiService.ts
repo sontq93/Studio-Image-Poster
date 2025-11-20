@@ -1,8 +1,10 @@
 import { GoogleGenAI, Type, Modality } from "@google/genai";
-import type { ImageFile, ModelSelection, ImageQuality } from '../types';
+import type { ImageFile, ModelSelection, ImageQuality } from "../types";
 
-// FIX: The API key must be obtained exclusively from `process.env.API_KEY` and used directly in the `GoogleGenAI` constructor as per the coding guidelines. This also resolves the TypeScript error regarding `import.meta.env`.
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Dùng biến môi trường phía client (Vite)
+const ai = new GoogleGenAI({
+  apiKey: import.meta.env.VITE_GEMINI_API_KEY,
+});
 
 const fileToGenerativePart = (base64: string, mimeType: string) => {
   return {
