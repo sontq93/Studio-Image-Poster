@@ -1,7 +1,7 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import type { AspectRatio, ImageFile, ModelSelection, ImageQuality } from './types';
 import ImageUploader from './components/ImageUploader';
-import { SparklesIcon, DownloadIcon, RefreshCwIcon, ZoomInIcon, XIcon } from './components/IconComponents';
+import { SparklesIcon, DownloadIcon, RefreshCwIcon, ZoomInIcon, XIcon, MinimizeIcon } from './components/IconComponents';
 import { getStyleSuggestions, generateBrandedImage } from './services/geminiService';
 
 type GeneratedImage = {
@@ -28,10 +28,18 @@ const App: React.FC = () => {
     const [selectedImage, setSelectedImage] = useState<GeneratedImage | null>(null);
     const [regeneratingStyle, setRegeneratingStyle] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+    
+    // State for specific product dimensions
+    const [productDimensions, setProductDimensions] = useState<string>('');
+    
+    // State for the enhanced zoom modal
     const [zoomedImage, setZoomedImage] = useState<GeneratedImage | null>(null);
+    const [zoomLevel, setZoomLevel] = useState(1);
+    const [imagePosition, setImagePosition] = useState({ x: 0, y: 0 });
+    const [isPanning, setIsPanning] = useState(false);
+    const panStartRef = useRef({ startX: 0, startY: 0, initialX: 0, initialY: 0 });
 
-
-    const requiredImagesUploaded = productImage && logoImage;
+    const requiredImagesUploaded = !!productImage;
 
     const fetchStyleSuggestions = useCallback(async () => {
         if (!productImage) return;
@@ -59,7 +67,7 @@ const App: React.FC = () => {
     
     const handleGenerate = async () => {
         if (!requiredImagesUploaded) {
-            setError("Vui lòng tải lên ảnh Sản Phẩm và Logo để tiếp tục.");
+            setError("Vui lòng tải lên ảnh Sản Phẩm để tiếp tục.");
             return;
         }
 
@@ -73,6 +81,7 @@ const App: React.FC = () => {
         setGeneratedImages(null);
         setSelectedImage(null);
         setError(null);
+        setProductDimensions(''); // Reset custom dimensions on new full generation
         
         const messages = ["Đang dựng bối cảnh...", "Đang tạo các biến thể phong cách...", "Đang hoàn thiện các ấn phẩm...", "AI đang sáng tạo, vui lòng chờ..."];
         let messageIndex = 0;
@@ -101,15 +110,15 @@ const App: React.FC = () => {
         }
     };
     
-    const handleRegenerateStyle = async (styleToRegen: string) => {
-        if (!productImage || !logoImage || regeneratingStyle) return;
+    const handleRegenerateStyle = async (styleToRegen: string, dimensions: string = "") => {
+        if (!productImage || regeneratingStyle) return;
 
         setRegeneratingStyle(styleToRegen);
         setError(null);
 
         try {
             const regeneratedPart = await generateBrandedImage(
-                modelImage, productImage, logoImage, styleToRegen, aspectRatio, modelSelection, imageQuality, overlayText
+                modelImage, productImage, logoImage, styleToRegen, aspectRatio, modelSelection, imageQuality, overlayText, dimensions
             );
             
             const newImage = { style: styleToRegen, image: regeneratedPart };
@@ -139,6 +148,7 @@ const App: React.FC = () => {
         setAspectRatio('1:1');
         setImageQuality('4K');
         setOverlayText('');
+        setProductDimensions('');
         setGeneratedImages(null);
         setSelectedImage(null);
         setError(null);
@@ -155,6 +165,54 @@ const App: React.FC = () => {
         link.click();
         document.body.removeChild(link);
     };
+
+    // --- Handlers for the enhanced zoom modal ---
+    const openZoomModal = (image: GeneratedImage) => {
+        setZoomedImage(image);
+        setZoomLevel(1);
+        setImagePosition({ x: 0, y: 0 });
+    };
+
+    const closeZoomModal = () => {
+        setZoomedImage(null);
+    };
+
+    const handleZoom = (level: number) => {
+        setZoomLevel(level);
+        // Reset position when fitting the image or if zooming out significantly
+        if (level === 1) {
+            setImagePosition({ x: 0, y: 0 });
+        }
+    };
+
+    const handlePanStart = (e: React.MouseEvent) => {
+        e.preventDefault();
+        if (zoomLevel <= 1) return; // Don't pan if not zoomed in
+        setIsPanning(true);
+        panStartRef.current = {
+            startX: e.clientX,
+            startY: e.clientY,
+            initialX: imagePosition.x,
+            initialY: imagePosition.y,
+        };
+    };
+
+    const handlePanMove = (e: React.MouseEvent) => {
+        e.preventDefault();
+        if (!isPanning) return;
+        const dx = e.clientX - panStartRef.current.startX;
+        const dy = e.clientY - panStartRef.current.startY;
+        setImagePosition({
+            x: panStartRef.current.initialX + dx,
+            y: panStartRef.current.initialY + dy,
+        });
+    };
+
+    const handlePanEnd = () => {
+        setIsPanning(false);
+    };
+    // --- End of zoom modal handlers ---
+
 
     const aspectRatioClasses: Record<AspectRatio, string> = {
         '1:1': 'aspect-square',
@@ -182,7 +240,7 @@ const App: React.FC = () => {
                             className={`rounded-xl w-full h-full object-contain transition-all duration-300`}
                         />
                          <div className="absolute top-2 right-2 flex items-center gap-2">
-                             <button onClick={() => setZoomedImage(selectedImage)} className="p-2 rounded-full bg-black/50 hover:bg-black/70 text-white backdrop-blur-sm transition-all" aria-label="Phóng to">
+                             <button onClick={() => openZoomModal(selectedImage)} className="p-2 rounded-full bg-black/50 hover:bg-black/70 text-white backdrop-blur-sm transition-all" aria-label="Phóng to">
                                  <ZoomInIcon className="w-5 h-5"/>
                              </button>
                              <button onClick={() => downloadImage(selectedImage.image, selectedImage.style)} className="p-2 rounded-full bg-black/50 hover:bg-black/70 text-white backdrop-blur-sm transition-all" aria-label="Tải xuống">
@@ -225,7 +283,7 @@ const App: React.FC = () => {
                 <div className="space-y-4">
                     <div className="grid grid-cols-2 gap-4">
                         <ImageUploader label="Ảnh Sản Phẩm (*)" onImageUpload={setProductImage} uploadedImage={productImage} />
-                        <ImageUploader label="Ảnh Logo (*)" onImageUpload={setLogoImage} uploadedImage={logoImage} />
+                        <ImageUploader label="Ảnh Logo (Tùy chọn)" onImageUpload={setLogoImage} uploadedImage={logoImage} />
                     </div>
                     <ImageUploader label="Ảnh Người Mẫu" onImageUpload={setModelImage} uploadedImage={modelImage} />
                     {!modelImage && (
@@ -310,24 +368,60 @@ const App: React.FC = () => {
                         <Canvas />
                     </div>
                     <div className="lg:col-span-5 xl:col-span-4">
-                        {generatedImages ? (
+                        {generatedImages && selectedImage ? (
                              <div className="rounded-xl bg-slate-800/50 backdrop-blur-sm border border-slate-700 p-5 space-y-4">
                                  <h3 className="font-semibold text-lg text-white">Kết quả của bạn</h3>
                                  <p className="text-sm text-slate-400">Chọn một ảnh bên trái để xem chi tiết hoặc tạo lại phong cách bạn muốn.</p>
+                                 
                                  <div className="grid grid-cols-2 gap-3">
                                     {generatedImages.map(img => (
                                         <button
                                             key={img.style}
                                             disabled={regeneratingStyle !== null}
-                                            onClick={() => handleRegenerateStyle(img.style)}
-                                            className="w-full text-sm inline-flex items-center justify-center gap-2 bg-slate-700 hover:bg-slate-600 text-slate-200 font-semibold py-2 px-3 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                            onClick={() => {
+                                                setSelectedImage(img);
+                                                handleRegenerateStyle(img.style, productDimensions);
+                                            }}
+                                            className={`w-full text-sm inline-flex flex-col items-center justify-center gap-1 py-2 px-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed border border-slate-700
+                                            ${selectedImage.style === img.style ? 'bg-slate-700 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
                                         >
-                                            <RefreshCwIcon className="w-4 h-4" />
-                                            Tạo lại "{img.style}"
+                                            <RefreshCwIcon className="w-4 h-4 mb-1" />
+                                            <span className="truncate w-full text-center">{img.style}</span>
                                         </button>
                                     ))}
                                  </div>
-                                 <button onClick={handleReset} className="w-full inline-flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg text-base transition-colors">
+
+                                 {/* Special Regeneration Block for the Selected Image */}
+                                 <div className="p-4 rounded-lg bg-indigo-900/30 border border-indigo-500/30 space-y-3">
+                                     <p className="text-sm font-medium text-indigo-300">Chỉnh sửa: {selectedImage.style}</p>
+                                     
+                                     <div className="space-y-2">
+                                         <label htmlFor="dimensions" className="block text-xs text-slate-400">Kích thước thực tế sản phẩm:</label>
+                                         <div className="flex gap-2">
+                                             <input 
+                                                 id="dimensions"
+                                                 type="text" 
+                                                 value={productDimensions}
+                                                 onChange={(e) => setProductDimensions(e.target.value)}
+                                                 placeholder="VD: Cao 15cm, vừa lòng bàn tay..."
+                                                 className="flex-1 bg-slate-900/70 border border-slate-600 text-white text-xs rounded-lg focus:ring-indigo-500 focus:border-indigo-500 px-3 py-2"
+                                             />
+                                         </div>
+                                         <button
+                                             disabled={regeneratingStyle !== null || !productDimensions.trim()}
+                                             onClick={() => handleRegenerateStyle(selectedImage.style, productDimensions)}
+                                             className="w-full text-xs inline-flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 px-3 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                         >
+                                             <MinimizeIcon className="w-4 h-4" />
+                                             Tạo lại với kích thước này
+                                         </button>
+                                     </div>
+                                     <p className="text-[10px] text-indigo-400/80 text-center">
+                                        Giữ nguyên bố cục, chỉ điều chỉnh tỷ lệ sản phẩm cho đúng thực tế.
+                                     </p>
+                                 </div>
+
+                                 <button onClick={handleReset} className="w-full inline-flex items-center justify-center gap-2 bg-slate-700 hover:bg-slate-600 text-white font-bold py-3 px-6 rounded-lg text-base transition-colors mt-4">
                                     <RefreshCwIcon className="w-5 h-5"/> Bắt đầu lại
                                 </button>
                              </div>
@@ -336,12 +430,21 @@ const App: React.FC = () => {
                         )}
                     </div>
                 </div>
+
+                <footer className="mt-12 py-6 border-t border-slate-800 text-center">
+                    <p className="text-slate-500 text-sm">
+                        Made by <span className="text-slate-400 font-medium">Nguyễn Văn Sơn</span>
+                    </p>
+                    <p className="text-slate-500 text-sm mt-1">
+                        Liên hệ: <a href="tel:0989881732" className="text-indigo-400 hover:text-indigo-300 transition-colors">0989881732</a>
+                    </p>
+                </footer>
             </main>
 
             {zoomedImage && (
                 <div 
                     className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4" 
-                    onClick={() => setZoomedImage(null)}
+                    onClick={closeZoomModal}
                     aria-modal="true"
                     role="dialog"
                 >
@@ -350,16 +453,36 @@ const App: React.FC = () => {
                         .animate-scale-in { animation: scale-in 0.3s cubic-bezier(0.25, 1, 0.5, 1); }
                     `}</style>
                     <div 
-                        className="relative w-full max-w-5xl max-h-[90vh] animate-scale-in"
+                        className="relative w-full max-w-5xl h-full max-h-[90vh] animate-scale-in flex items-center justify-center"
                         onClick={(e) => e.stopPropagation()}
                     >
-                         <img 
-                             src={`data:image/jpeg;base64,${zoomedImage.image}`} 
-                             alt={`Chế độ xem phóng to: ${zoomedImage.style}`} 
-                             className="rounded-lg object-contain w-full h-auto max-h-[90vh]"
-                         />
+                         <div 
+                            className="w-full h-full overflow-hidden"
+                            onMouseDown={handlePanStart}
+                            onMouseMove={handlePanMove}
+                            onMouseUp={handlePanEnd}
+                            onMouseLeave={handlePanEnd}
+                            style={{ cursor: isPanning ? 'grabbing' : (zoomLevel > 1 ? 'grab' : 'default') }}
+                         >
+                            <img 
+                                src={`data:image/jpeg;base64,${zoomedImage.image}`} 
+                                alt={`Chế độ xem phóng to: ${zoomedImage.style}`} 
+                                className="w-full h-full object-contain"
+                                style={{
+                                    transform: `translate(${imagePosition.x}px, ${imagePosition.y}px) scale(${zoomLevel})`,
+                                    transition: isPanning ? 'none' : 'transform 0.2s ease-out',
+                                }}
+                                draggable="false"
+                            />
+                         </div>
+                        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/60 backdrop-blur-sm rounded-full p-1 flex items-center gap-1 text-white text-sm font-medium shadow-lg">
+                            <button onClick={() => handleZoom(1)} className={`px-3 py-1.5 rounded-full transition-colors ${zoomLevel === 1 ? 'bg-indigo-600' : 'hover:bg-white/20'}`}>Fit</button>
+                            <button onClick={() => handleZoom(4)} className={`px-3 py-1.5 rounded-full transition-colors ${zoomLevel === 4 ? 'bg-indigo-600' : 'hover:bg-white/20'}`}>4x</button>
+                            <button onClick={() => handleZoom(8)} className={`px-3 py-1.5 rounded-full transition-colors ${zoomLevel === 8 ? 'bg-indigo-600' : 'hover:bg-white/20'}`}>8x</button>
+                            <button onClick={() => handleZoom(20)} className={`px-3 py-1.5 rounded-full transition-colors ${zoomLevel === 20 ? 'bg-indigo-600' : 'hover:bg-white/20'}`}>20x</button>
+                        </div>
                         <button
-                            onClick={() => setZoomedImage(null)}
+                            onClick={closeZoomModal}
                             className="absolute -top-3 -right-3 md:-top-4 md:-right-4 bg-white text-gray-800 rounded-full p-2 shadow-lg hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 focus:ring-offset-gray-900 transition-transform hover:scale-110"
                             aria-label="Đóng"
                         >

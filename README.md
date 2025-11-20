@@ -1,20 +1,53 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Studio Ảnh Thương Hiệu AI
 
-# Run and deploy your AI Studio app
+Ứng dụng web sử dụng Google Gemini AI để tạo ra các hình ảnh quảng cáo thương hiệu chất lượng cao từ ảnh sản phẩm và người mẫu.
 
-This contains everything you need to run your app locally.
+## Tác giả
 
-View your app in AI Studio: https://ai.studio/apps/drive/1iqlsIrKGC82KlEpjCOo7u2Q69Ifus1zt
+**Nguyễn Văn Sơn**  
+Liên hệ: 0989881732
 
-## Run Locally
+## Cài đặt và chạy Local
 
-**Prerequisites:**  Node.js
+1.  Clone repository về máy:
+    ```bash
+    git clone <link-repo-cua-ban>
+    cd studio-anh-thuong-hieu-ai
+    ```
 
+2.  Cài đặt dependencies:
+    ```bash
+    npm install
+    ```
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+3.  Tạo file `.env` tại thư mục gốc và thêm API Key của bạn:
+    ```env
+    API_KEY=your_google_gemini_api_key_here
+    ```
+
+4.  Chạy ứng dụng:
+    ```bash
+    npm run dev
+    ```
+
+## Triển khai (Deploy)
+
+### Vercel
+
+1.  Đẩy code lên GitHub.
+2.  Vào [Vercel Dashboard](https://vercel.com/), chọn "Add New..." -> "Project".
+3.  Import repository GitHub của bạn.
+4.  Trong phần **Environment Variables**, thêm biến:
+    *   **Key**: `API_KEY`
+    *   **Value**: (Dán khóa API Google Gemini của bạn vào đây)
+5.  Nhấn **Deploy**.
+
+### Netlify
+
+1.  Đẩy code lên GitHub.
+2.  Vào [Netlify](https://www.netlify.com/), chọn "Add new site" -> "Import an existing project".
+3.  Kết nối với GitHub và chọn repo.
+4.  Trong phần "Site settings" -> "Environment variables", thêm biến:
+    *   **Key**: `API_KEY`
+    *   **Value**: (Khóa API của bạn)
+5.  Nhấn **Deploy site**.
