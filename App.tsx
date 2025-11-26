@@ -1,8 +1,8 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import type { AspectRatio, ImageFile, ModelSelection, ImageQuality } from './types';
 import ImageUploader from './components/ImageUploader';
-import { SparklesIcon, DownloadIcon, RefreshCwIcon, ZoomInIcon, XIcon, MinimizeIcon } from './components/IconComponents';
-import { getStyleSuggestions, generateBrandedImage } from './services/geminiService';
+import { SparklesIcon, DownloadIcon, RefreshCwIcon, ZoomInIcon, XIcon, MinimizeIcon, InfoIcon, CopyIcon, CheckIcon } from './components/IconComponents';
+import { getStyleSuggestions, generateBrandedImage, analyzeViralStrategy, type ViralStrategy } from './services/geminiService';
 
 type GeneratedImage = {
     style: string;
@@ -14,6 +14,12 @@ const App: React.FC = () => {
     const [productImage, setProductImage] = useState<ImageFile | null>(null);
     const [logoImage, setLogoImage] = useState<ImageFile | null>(null);
     const [modelSelection, setModelSelection] = useState<ModelSelection>('female-asian');
+    
+    // Reference Article & Strategy State
+    const [referenceArticle, setReferenceArticle] = useState('');
+    const [viralStrategy, setViralStrategy] = useState<ViralStrategy | null>(null);
+    const [isAnalyzingStrategy, setIsAnalyzingStrategy] = useState(false);
+    const [showManualModelInput, setShowManualModelInput] = useState(false); // To force show model input even if AI says no
 
     const [suggestedStyles, setSuggestedStyles] = useState<string[]>([]);
     const [styleLoading, setStyleLoading] = useState(false);
@@ -32,6 +38,9 @@ const App: React.FC = () => {
     // State for specific product dimensions
     const [productDimensions, setProductDimensions] = useState<string>('');
     
+    // State for copy feedback
+    const [copySuccess, setCopySuccess] = useState(false);
+    
     // State for the enhanced zoom modal
     const [zoomedImage, setZoomedImage] = useState<GeneratedImage | null>(null);
     const [zoomLevel, setZoomLevel] = useState(1);
@@ -46,25 +55,63 @@ const App: React.FC = () => {
         setStyleLoading(true);
         setError(null);
         try {
-            const styles = await getStyleSuggestions(productImage.base64, productImage.file.type);
+            // Pass article content and model image (if exists) to prioritization logic
+            const modelBase64 = modelImage ? modelImage.base64 : "";
+            const styles = await getStyleSuggestions(
+                productImage.base64, 
+                productImage.file.type, 
+                referenceArticle, 
+                modelBase64
+            );
             setSuggestedStyles(styles);
         } catch (err) {
             setError('Không thể lấy gợi ý phong cách. Sử dụng các phong cách mặc định.');
-            setSuggestedStyles(['Tối giản', 'Sống động', 'Thanh lịch', 'Hiện đại']);
+            setSuggestedStyles(['Sang trọng & Tinh tế', 'Hiện đại & Tối giản', 'Sống động & Tươi mới', 'Chuyên nghiệp']);
             console.error(err);
         } finally {
             setStyleLoading(false);
         }
-    }, [productImage]);
+    }, [productImage, modelImage, referenceArticle]);
 
+    // Re-fetch styles when images change
+    // Note: We don't include referenceArticle in the dependency array to avoid api calls on every keystroke.
+    // Instead, we rely on handleAnalyzeStrategy to trigger updates for text changes, 
+    // and this effect for image changes.
     useEffect(() => {
         if (productImage) {
             fetchStyleSuggestions();
         } else {
             setSuggestedStyles([]);
         }
-    }, [productImage, fetchStyleSuggestions]);
+    }, [productImage, modelImage]); // Removed referenceArticle from here intentionally
     
+    const handleAnalyzeStrategy = async () => {
+        if (!referenceArticle.trim()) return;
+        setIsAnalyzingStrategy(true);
+        setViralStrategy(null);
+        setError(null);
+        
+        try {
+            const strategy = await analyzeViralStrategy(referenceArticle);
+            setViralStrategy(strategy);
+            // If strategy says we DON'T need a human, ensure manual override is off initially
+            if (!strategy.needsHuman) {
+                setShowManualModelInput(false);
+            }
+            
+            // After analyzing text, refresh style suggestions if we have a product image
+            if (productImage) {
+                fetchStyleSuggestions();
+            }
+
+        } catch (err) {
+            console.error(err);
+            setError("Không thể phân tích chiến lược. Vui lòng thử lại.");
+        } finally {
+            setIsAnalyzingStrategy(false);
+        }
+    };
+
     const handleGenerate = async () => {
         if (!requiredImagesUploaded) {
             setError("Vui lòng tải lên ảnh Sản Phẩm để tiếp tục.");
@@ -83,7 +130,7 @@ const App: React.FC = () => {
         setError(null);
         setProductDimensions(''); // Reset custom dimensions on new full generation
         
-        const messages = ["Đang dựng bối cảnh...", "Đang tạo các biến thể phong cách...", "Đang hoàn thiện các ấn phẩm...", "AI đang sáng tạo, vui lòng chờ..."];
+        const messages = ["Đang đọc bài viết và dựng bối cảnh...", "Đang tạo các biến thể phong cách...", "Đang hoàn thiện các ấn phẩm...", "AI đang sáng tạo, vui lòng chờ..."];
         let messageIndex = 0;
         setLoadingMessage(messages[messageIndex]);
         const interval = setInterval(() => {
@@ -93,7 +140,7 @@ const App: React.FC = () => {
 
         try {
             const generationPromises = stylesToGenerate.map(style => 
-                generateBrandedImage(modelImage, productImage, logoImage, style, aspectRatio, modelSelection, imageQuality, overlayText)
+                generateBrandedImage(modelImage, productImage, logoImage, style, aspectRatio, modelSelection, imageQuality, overlayText, productDimensions, referenceArticle)
                     .then(image => ({ style, image }))
             );
             
@@ -118,7 +165,7 @@ const App: React.FC = () => {
 
         try {
             const regeneratedPart = await generateBrandedImage(
-                modelImage, productImage, logoImage, styleToRegen, aspectRatio, modelSelection, imageQuality, overlayText, dimensions
+                modelImage, productImage, logoImage, styleToRegen, aspectRatio, modelSelection, imageQuality, overlayText, dimensions, referenceArticle
             );
             
             const newImage = { style: styleToRegen, image: regeneratedPart };
@@ -149,11 +196,14 @@ const App: React.FC = () => {
         setImageQuality('4K');
         setOverlayText('');
         setProductDimensions('');
+        setReferenceArticle('');
+        setViralStrategy(null);
         setGeneratedImages(null);
         setSelectedImage(null);
         setError(null);
         setIsLoading(false);
         setModelSelection('female-asian');
+        setShowManualModelInput(false);
     };
 
     const downloadImage = (base64Image: string, style: string) => {
@@ -164,6 +214,23 @@ const App: React.FC = () => {
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+    };
+
+    const handleCopyImage = async (base64Image: string) => {
+        try {
+            const response = await fetch(`data:image/jpeg;base64,${base64Image}`);
+            const blob = await response.blob();
+            await navigator.clipboard.write([
+                new ClipboardItem({
+                    [blob.type]: blob,
+                }),
+            ]);
+            setCopySuccess(true);
+            setTimeout(() => setCopySuccess(false), 2000);
+        } catch (err) {
+            console.error("Failed to copy image: ", err);
+            alert("Không thể sao chép ảnh trực tiếp. Vui lòng tải xuống.");
+        }
     };
 
     // --- Handlers for the enhanced zoom modal ---
@@ -179,7 +246,6 @@ const App: React.FC = () => {
 
     const handleZoom = (level: number) => {
         setZoomLevel(level);
-        // Reset position when fitting the image or if zooming out significantly
         if (level === 1) {
             setImagePosition({ x: 0, y: 0 });
         }
@@ -187,7 +253,7 @@ const App: React.FC = () => {
 
     const handlePanStart = (e: React.MouseEvent) => {
         e.preventDefault();
-        if (zoomLevel <= 1) return; // Don't pan if not zoomed in
+        if (zoomLevel <= 1) return;
         setIsPanning(true);
         panStartRef.current = {
             startX: e.clientX,
@@ -240,10 +306,18 @@ const App: React.FC = () => {
                             className={`rounded-xl w-full h-full object-contain transition-all duration-300`}
                         />
                          <div className="absolute top-2 right-2 flex items-center gap-2">
-                             <button onClick={() => openZoomModal(selectedImage)} className="p-2 rounded-full bg-black/50 hover:bg-black/70 text-white backdrop-blur-sm transition-all" aria-label="Phóng to">
+                             <button onClick={() => openZoomModal(selectedImage)} className="p-2 rounded-full bg-black/50 hover:bg-black/70 text-white backdrop-blur-sm transition-all" aria-label="Phóng to" title="Phóng to">
                                  <ZoomInIcon className="w-5 h-5"/>
                              </button>
-                             <button onClick={() => downloadImage(selectedImage.image, selectedImage.style)} className="p-2 rounded-full bg-black/50 hover:bg-black/70 text-white backdrop-blur-sm transition-all" aria-label="Tải xuống">
+                             <button 
+                                onClick={() => handleCopyImage(selectedImage.image)} 
+                                className={`p-2 rounded-full text-white backdrop-blur-sm transition-all ${copySuccess ? 'bg-green-600/80 hover:bg-green-600' : 'bg-black/50 hover:bg-black/70'}`}
+                                aria-label="Sao chép ảnh"
+                                title="Sao chép ảnh vào bộ nhớ tạm"
+                             >
+                                 {copySuccess ? <CheckIcon className="w-5 h-5"/> : <CopyIcon className="w-5 h-5"/>}
+                             </button>
+                             <button onClick={() => downloadImage(selectedImage.image, selectedImage.style)} className="p-2 rounded-full bg-black/50 hover:bg-black/70 text-white backdrop-blur-sm transition-all" aria-label="Tải xuống" title="Tải xuống">
                                  <DownloadIcon className="w-5 h-5"/>
                              </button>
                          </div>
@@ -275,37 +349,128 @@ const App: React.FC = () => {
         </div>
     );
     
+    // UI Helper: Determines if Model Input should be shown
+    const shouldShowModelInput = () => {
+        // 1. If we have a strategy:
+        if (viralStrategy) {
+            // Show if strategy needs human OR if user manually overrode it OR if user already uploaded a model
+            return viralStrategy.needsHuman || showManualModelInput || !!modelImage;
+        }
+        // 2. If no strategy (didn't analyze yet, or no article):
+        // Show by default (classic behavior)
+        return true;
+    };
+
     const Controls = () => (
          <div className="w-full h-full space-y-6">
-            {/* Step 1 */}
+            
+            {/* Step 1: Article & Analysis */}
             <div className="rounded-xl bg-slate-800/50 backdrop-blur-sm border border-slate-700 p-5">
-                <h3 className="font-semibold text-lg text-white mb-4">Bước 1: Tải Lên Tài Sản</h3>
+                <div className="flex items-center justify-between mb-3">
+                    <h3 className="font-semibold text-lg text-white">Bước 1: Nội Dung Bài Viết</h3>
+                    <InfoIcon className="w-4 h-4 text-slate-500" />
+                </div>
+                
+                <div className="space-y-3">
+                    <textarea 
+                        id="referenceArticle" 
+                        rows={4} 
+                        value={referenceArticle} 
+                        onChange={(e) => setReferenceArticle(e.target.value)} 
+                        placeholder="Dán nội dung bài viết quảng cáo vào đây. AI sẽ phân tích xem bạn cần hình ảnh như thế nào..." 
+                        className="bg-slate-900/70 border border-slate-600 text-white text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block w-full p-2.5 resize-none"
+                    ></textarea>
+                    
+                    <button 
+                        onClick={handleAnalyzeStrategy}
+                        disabled={!referenceArticle.trim() || isAnalyzingStrategy}
+                        className="w-full py-2 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 border border-indigo-500/50 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                        {isAnalyzingStrategy ? (
+                            <>
+                                <div className="w-4 h-4 border-2 border-t-transparent border-indigo-300 rounded-full animate-spin"></div>
+                                Đang phân tích chiến lược...
+                            </>
+                        ) : (
+                            <>
+                                <SparklesIcon className="w-4 h-4" />
+                                Phân tích Chiến lược Viral
+                            </>
+                        )}
+                    </button>
+                </div>
+
+                {/* Strategy Result Display */}
+                {viralStrategy && (
+                    <div className="mt-4 p-3 bg-slate-900/60 rounded-lg border-l-4 border-indigo-500 animate-fade-in">
+                        <div className="flex items-start gap-3">
+                            <div className="flex-1">
+                                <h4 className="text-sm font-semibold text-indigo-300 mb-1">Gợi ý từ Chuyên gia AI:</h4>
+                                <p className="text-sm text-slate-300 italic mb-2">"{viralStrategy.reason}"</p>
+                                <div className="flex flex-wrap gap-1">
+                                    <span className={`text-xs px-2 py-0.5 rounded border ${viralStrategy.needsHuman ? 'bg-green-900/30 border-green-500/50 text-green-400' : 'bg-slate-800 border-slate-600 text-slate-400'}`}>
+                                        {viralStrategy.needsHuman ? '✅ Cần yếu tố con người' : '❌ Tập trung vào Sản phẩm'}
+                                    </span>
+                                    {viralStrategy.suggestedElements.map((el, i) => (
+                                        <span key={i} className="text-xs px-2 py-0.5 rounded bg-slate-800 border border-slate-600 text-slate-400">{el}</span>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            {/* Step 2: Upload Assets (Dynamic based on Strategy) */}
+            <div className="rounded-xl bg-slate-800/50 backdrop-blur-sm border border-slate-700 p-5">
+                <h3 className="font-semibold text-lg text-white mb-4">Bước 2: Tài Nguyên Hình Ảnh</h3>
                 <div className="space-y-4">
                     <div className="grid grid-cols-2 gap-4">
                         <ImageUploader label="Ảnh Sản Phẩm (*)" onImageUpload={setProductImage} uploadedImage={productImage} />
-                        <ImageUploader label="Ảnh Logo (Tùy chọn)" onImageUpload={setLogoImage} uploadedImage={logoImage} />
+                        <ImageUploader label="Ảnh Logo" onImageUpload={setLogoImage} uploadedImage={logoImage} />
                     </div>
-                    <ImageUploader label="Ảnh Người Mẫu" onImageUpload={setModelImage} uploadedImage={modelImage} />
-                    {!modelImage && (
-                        <div>
-                            <label htmlFor="modelSelection" className="block text-sm font-medium text-slate-300 mb-2">Hoặc Chọn Kiểu Người Mẫu</label>
-                            <select id="modelSelection" value={modelSelection} onChange={(e) => setModelSelection(e.target.value as ModelSelection)} className="bg-slate-900/70 border border-slate-600 text-white text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block w-full p-2.5">
-                                <option value="female-asian">Nữ (Châu Á)</option>
-                                <option value="male-asian">Nam (Châu Á)</option>
-                                <option value="female-european">Nữ (Châu Âu)</option>
-                                <option value="male-european">Nam (Châu Âu)</option>
-                            </select>
+
+                    {shouldShowModelInput() ? (
+                        <div className="animate-fade-in">
+                            <div className="flex items-center justify-between mb-2">
+                                <span className="text-sm font-medium text-slate-300">Ảnh Người Mẫu {viralStrategy?.needsHuman && <span className="text-green-400 text-xs ml-2">(Được đề xuất)</span>}</span>
+                                {viralStrategy && !viralStrategy.needsHuman && (
+                                     <button onClick={() => setShowManualModelInput(false)} className="text-xs text-red-400 hover:text-red-300">Ẩn đi</button>
+                                )}
+                            </div>
+                            <ImageUploader label="" onImageUpload={setModelImage} uploadedImage={modelImage} />
+                            {!modelImage && (
+                                <div className="mt-2">
+                                    <label htmlFor="modelSelection" className="block text-xs font-medium text-slate-400 mb-1">Hoặc Chọn Mẫu AI</label>
+                                    <select id="modelSelection" value={modelSelection} onChange={(e) => setModelSelection(e.target.value as ModelSelection)} className="bg-slate-900/70 border border-slate-600 text-white text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block w-full p-2.5">
+                                        <option value="female-asian">Nữ (Châu Á)</option>
+                                        <option value="male-asian">Nam (Châu Á)</option>
+                                        <option value="female-european">Nữ (Châu Âu)</option>
+                                        <option value="male-european">Nam (Châu Âu)</option>
+                                    </select>
+                                </div>
+                            )}
+                        </div>
+                    ) : (
+                        <div className="p-4 border border-dashed border-slate-700 rounded-lg text-center bg-slate-800/30">
+                            <p className="text-sm text-slate-400 mb-2">AI gợi ý bài viết này hiệu quả nhất khi chỉ tập trung vào Sản phẩm & Logo.</p>
+                            <button 
+                                onClick={() => setShowManualModelInput(true)}
+                                className="text-xs text-indigo-400 hover:text-indigo-300 underline"
+                            >
+                                Vẫn thêm người mẫu?
+                            </button>
                         </div>
                     )}
                 </div>
             </div>
 
-            {/* Step 2 & 3 */}
+            {/* Step 3 & 4 */}
             {requiredImagesUploaded && (
-                 <div className="rounded-xl bg-slate-800/50 backdrop-blur-sm border border-slate-700 p-5 space-y-6">
+                 <div className="rounded-xl bg-slate-800/50 backdrop-blur-sm border border-slate-700 p-5 space-y-6 animate-fade-in">
                     <div>
-                        <h3 className="font-semibold text-lg text-white mb-4">Bước 2: Phong Cách AI Gợi Ý</h3>
-                        {styleLoading ? <div className="text-slate-400 text-sm">Đang phân tích...</div> : (
+                        <h3 className="font-semibold text-lg text-white mb-4">Bước 3: Phong Cách Đề Xuất</h3>
+                        {styleLoading ? <div className="text-slate-400 text-sm">Đang phân tích và gợi ý phong cách...</div> : (
                             <div className="flex flex-wrap gap-2">
                                 {suggestedStyles.slice(0, 4).map(style => (
                                      <span key={style} className="px-3 py-1 rounded-full text-xs font-medium bg-slate-700 text-indigo-300 border border-slate-600">
@@ -316,7 +481,7 @@ const App: React.FC = () => {
                         )}
                     </div>
                     <div>
-                        <h3 className="font-semibold text-lg text-white mb-4">Bước 3: Tùy Chỉnh & Tạo Ảnh</h3>
+                        <h3 className="font-semibold text-lg text-white mb-4">Bước 4: Tùy Chỉnh & Tạo</h3>
                         <div className="space-y-4">
                             <div>
                                 <label className="block text-sm font-medium text-slate-300 mb-2">Tỷ Lệ</label>
@@ -339,13 +504,13 @@ const App: React.FC = () => {
                                 </div>
                             </div>
                            <div>
-                                <label htmlFor="overlayText" className="block text-sm font-medium text-slate-300 mb-2">Văn Bản (Tùy chọn)</label>
-                                <textarea id="overlayText" rows={3} value={overlayText} onChange={(e) => setOverlayText(e.target.value)} placeholder="VD: Ưu đãi đặc biệt..." className="bg-slate-900/70 border border-slate-600 text-white text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block w-full p-2.5"></textarea>
+                                <label htmlFor="overlayText" className="block text-sm font-medium text-slate-300 mb-2">Văn Bản Trên Ảnh (Tùy chọn)</label>
+                                <textarea id="overlayText" rows={2} value={overlayText} onChange={(e) => setOverlayText(e.target.value)} placeholder="VD: Ưu đãi đặc biệt..." className="bg-slate-900/70 border border-slate-600 text-white text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block w-full p-2.5"></textarea>
                            </div>
                         </div>
                     </div>
                      <button onClick={handleGenerate} disabled={isLoading || styleLoading || !requiredImagesUploaded} className="w-full inline-flex items-center justify-center gap-2 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-bold py-3 px-6 rounded-lg text-base transition-all disabled:opacity-50 disabled:cursor-not-allowed">
-                        <SparklesIcon className="w-5 h-5"/> Tạo 4 Ảnh
+                        <SparklesIcon className="w-5 h-5"/> {referenceArticle ? 'Hiện Thực Hóa Ý Tưởng' : 'Tạo 4 Ảnh'}
                     </button>
                  </div>
             )}

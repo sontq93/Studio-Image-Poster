@@ -4,16 +4,19 @@ import react from '@vitejs/plugin-react'
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
   // Load env file based on `mode` in the current working directory.
-  // Set the third parameter to '' to load all env regardless of the `VITE_` prefix.
-  // Fix: Property 'cwd' does not exist on type 'Process'. Using type assertion.
   const env = loadEnv(mode, (process as any).cwd(), '');
+
+  // On Netlify, environment variables are injected into process.env during build.
+  // We prioritize the system environment variable (process.env.API_KEY) 
+  // over variables loaded from local .env files (env.API_KEY).
+  // Fallback to empty string if undefined to prevent build/runtime errors.
+  const apiKey = process.env.API_KEY || env.API_KEY || '';
   
   return {
     plugins: [react()],
     define: {
-      // Định nghĩa process.env.API_KEY để thay thế bằng giá trị thực khi build
-      // Điều này cần thiết vì @google/genai SDK yêu cầu process.env.API_KEY
-      'process.env.API_KEY': JSON.stringify(env.API_KEY)
+      // Define process.env.API_KEY global for use in the client-side bundle
+      'process.env.API_KEY': JSON.stringify(apiKey)
     }
   }
 })

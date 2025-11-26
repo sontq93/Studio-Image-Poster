@@ -1,8 +1,14 @@
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import type { ImageFile, ModelSelection, ImageQuality } from '../types';
 
-// FIX: The API key must be obtained exclusively from `process.env.API_KEY` and used directly in the `GoogleGenAI` constructor as per the coding guidelines. This also resolves the TypeScript error regarding `import.meta.env`.
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Helper to lazily initialize the AI client
+const getAIClient = () => {
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) {
+    throw new Error("API Key is missing. Please configure VITE_API_KEY or API_KEY in your environment variables.");
+  }
+  return new GoogleGenAI({ apiKey });
+};
 
 const fileToGenerativePart = (base64: string, mimeType: string) => {
   return {
@@ -13,34 +19,113 @@ const fileToGenerativePart = (base64: string, mimeType: string) => {
   };
 };
 
-export const getStyleSuggestions = async (productImageBase64: string, mimeType: string): Promise<string[]> => {
+export interface ViralStrategy {
+  needsHuman: boolean;
+  reason: string;
+  suggestedElements: string[];
+}
+
+export const analyzeViralStrategy = async (articleContent: string): Promise<ViralStrategy> => {
+    const ai = getAIClient();
+    const prompt = `
+    You are a viral marketing expert. Analyze the following social media post content to determine the visual strategy.
+    
+    **Post Content:**
+    "${articleContent}"
+
+    **Task:**
+    Determine if this content requires a **Human Model (KOL/Actor)** to convey emotion/story, OR if it should focus purely on the **Product/Logo** (e.g., feature list, flash sale, object-only focus).
+
+    **Output Rules:**
+    Return a JSON object with:
+    1.  \`needsHuman\` (boolean): true if a human model is recommended, false if product-only is better.
+    2.  \`reason\` (string): A short explanation in Vietnamese (e.g., "Bài viết kể về nỗi đau khách hàng nên cần biểu cảm khuôn mặt" or "Bài viết tập trung thông số kỹ thuật, nên focus vào sản phẩm").
+    3.  \`suggestedElements\` (array of strings): 3-4 keywords in Vietnamese describing the necessary visual props or vibe (e.g., ["Ánh sáng ấm", "Bàn làm việc", "Laptop"]).
+
+    Do not include markdown code blocks. Just the JSON.
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: { parts: [{ text: prompt }] },
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        needsHuman: { type: Type.BOOLEAN },
+                        reason: { type: Type.STRING },
+                        suggestedElements: { 
+                            type: Type.ARRAY,
+                            items: { type: Type.STRING }
+                        }
+                    }
+                }
+            }
+        });
+        
+        const jsonStr = response.text.trim();
+        return JSON.parse(jsonStr) as ViralStrategy;
+    } catch (error) {
+        console.error("Error analyzing strategy:", error);
+        return {
+            needsHuman: true,
+            reason: "Không thể phân tích chiến lược, hiển thị đầy đủ các tùy chọn.",
+            suggestedElements: []
+        };
+    }
+};
+
+export const getStyleSuggestions = async (
+    productImageBase64: string, 
+    mimeType: string, 
+    referenceArticle: string = "", 
+    modelImageBase64: string = ""
+): Promise<string[]> => {
   const prompt = `
-    You are a professional marketing and branding expert. Your task is to analyze the provided product image and generate 4 distinct, highly creative, and commercially appealing style suggestions for a promotional banner.
+    You are a Creative Director for a high-end advertising agency.
+    Your task is to suggest 4 visual styles for a marketing campaign.
 
-    **Analysis Steps:**
-    1.  **Identify the Product:** What is the product? Be specific (e.g., "a can of sparkling water," "a high-end wireless headphone").
-    2.  **Determine the Category & Industry:** Classify the product (e.g., "beverage," "consumer electronics," "skincare").
-    3.  **Isolate Product from Packaging:** If the image includes packaging (like a box or wrapper), your style suggestions must be based on the **product itself**, not the packaging.
-    4.  **Generate Tailored Styles:** Based on your analysis, suggest 4 unique styles that would resonate with the target audience for this product. Each style should be a short, evocative phrase (2-3 words).
+    **INPUTS TO ANALYZE (In order of priority):**
+    1.  **Reference Article (PRIORITY #1):** "${referenceArticle}"
+        *   *Instruction:* Read the article to understand the Mood, Emotion, and Target Audience. (e.g., Is it sad? Joyful? Luxurious? Minimalist? Tech-savvy?). The visual style MUST support this message.
+    2.  **Model Image (PRIORITY #2):** ${modelImageBase64 ? "Provided" : "Not Provided"}
+        *   *Instruction:* If provided, the style must fit the look/vibe of the model.
+    3.  **Product Image (PRIORITY #3):** Provided
+        *   *Instruction:* Use this ONLY to identify *what* the object is (e.g., a bottle, a chair). **IGNORE the quality, lighting, or background of the original product photo.** Assume we will re-shoot it in a perfect studio.
 
-    **Example Output for a Luxury Watch:**
-    - "Modern & Minimalist"
-    - "Classic & Timeless"
-    - "Adventurous & Rugged"
-    - "Sleek & Futuristic"
+    **OUTPUT REQUIREMENTS:**
+    - Generate 4 distinct style names.
+    - **LANGUAGE: VIETNAMESE (Tiếng Việt)**.
+    - Format: Short, catchy phrases (2-4 words).
+    - Examples: "Sang trọng & Tối giản", "Ấm áp gia đình", "Cyberpunk Công nghệ", "Thiên nhiên tươi mát".
 
-    Now, analyze the user's product image and provide your 4 style suggestions.
+    Return ONLY a JSON object with a "styles" array.
   `;
   
+  const parts = [];
+  
+  // 1. Reference Article is embedded in prompt text
+  
+  // 2. Model Image (if exists)
+  if (modelImageBase64) {
+      parts.push(fileToGenerativePart(modelImageBase64, "image/png")); // Mime type guess, strictly inputs usually passed with type but base64 is enough for Gemini usually if context is clear, or we assume png/jpeg
+      parts.push({ text: "This is the Model Image (Priority 2)." });
+  }
+
+  // 3. Product Image
+  parts.push(fileToGenerativePart(productImageBase64, mimeType));
+  parts.push({ text: "This is the Product Image (Priority 3 - Only for object identification)." });
+
+  // 4. Prompt
+  parts.push({ text: prompt });
+
   try {
+    const ai = getAIClient();
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: { 
-        parts: [
-          fileToGenerativePart(productImageBase64, mimeType),
-          { text: prompt },
-        ]
-      },
+      model: 'gemini-2.5-flash', // Use flash for speed, it's good enough for text reasoning on images
+      contents: { parts: parts },
       config: {
         responseMimeType: "application/json",
         responseSchema: {
@@ -56,11 +141,10 @@ export const getStyleSuggestions = async (productImageBase64: string, mimeType: 
     });
     const jsonString = response.text.trim();
     const result = JSON.parse(jsonString);
-    // Ensure we only return up to 4 styles, as requested in the prompt
     return (result.styles || []).slice(0, 4);
   } catch (error) {
     console.error("Error getting style suggestions:", error);
-    return ['Tối giản & Sạch sẽ', 'Sống động & Năng động', 'Sang trọng & Thanh lịch', 'Tương lai & Công nghệ'];
+    return ['Sang trọng & Tinh tế', 'Tối giản Hiện đại', 'Điện ảnh Ấn tượng', 'Sáng tạo Đột phá'];
   }
 };
 
@@ -73,30 +157,64 @@ export const generateBrandedImage = async (
     modelSelection: ModelSelection,
     quality: ImageQuality,
     overlayText: string,
-    productDimensions: string = ""
+    productDimensions: string = "",
+    referenceArticle: string = ""
 ): Promise<string> => {
     
+    const ai = getAIClient();
+
     const modelDescriptionMap: Record<ModelSelection, string> = {
-        'female-asian': 'Female Asian model',
-        'male-asian': 'Male Asian model',
-        'female-european': 'Female European model',
-        'male-european': 'Male European model',
+        'female-asian': 'Beautiful Female Asian model, high-fashion look',
+        'male-asian': 'Handsome Male Asian model, professional look',
+        'female-european': 'Beautiful Female European model, high-fashion look',
+        'male-european': 'Handsome Male European model, professional look',
     };
     const modelDescription = modelDescriptionMap[modelSelection];
 
+    // --- LUXURY MANDATE BLOCK ---
+    const luxuryMandate = `
+    ### 0. LUXURY BRAND MANDATE (HIGHEST PRIORITY)
+    - **ROLE:** You are a high-end Art Director for a luxury brand (like Apple, Chanel, or Mercedes).
+    - **TONE & MOOD:** The image MUST feel expensive, sophisticated, and clean. No clutter. No cheap effects.
+    - **LIGHTING:** Use professional studio lighting (Softbox, Rim Lighting, or Butterfly Lighting). Shadows must be soft and realistic.
+    - **COLOR PALETTE:** Strictly adhere to the "${style}" palette, but keep it harmonious and premium.
+    `;
+
+    // --- INTERACTION RULES BLOCK ---
+    const interactionRules = `
+    ### 2.1. PRODUCT INTERACTION RULES (CRITICAL)
+    - **HANDS:** If the model holds the product, their hands must look **elegant, manicured, and refined**. Fingers should be relaxed, not gripping tightly.
+    - **VISIBILITY:** The model's hands **MUST NOT** cover the product's logo or key details. Hold the product by the edges or base.
+    - **ANGLE:** Angle the product towards the camera so it is clearly the hero of the shot.
+    `;
+
+    const contextInstruction = referenceArticle 
+    ? `
+### 1. SCENE & NARRATIVE (FROM ARTICLE)
+- **CONTEXT:** Based on the article: "${referenceArticle}"
+- **EXECUTION:** Visualize the emotion and setting described. If the article is emotional, the model's expression must be subtle and acting-grade. If the article is promotional, the focus is strictly on the product allure.
+- **AESTHETIC:** Merge this narrative with the "${style}" visual style.
+`
+    : `
+### 1. SCENE & STYLE
+- Create a high-end background that fits the theme: "${style}".
+- Keep the background blurry (Bokeh effect) if necessary to make the product pop.
+`;
+
     const modelInstruction = modelImage
         ? `
-### 2. Model (KOL)
-- **Source:** Use the person from the "Model Image".
-- **Fidelity:** You **MUST** preserve the model's exact facial identity. This is the most critical instruction.
-- **Flexibility:** You **MAY** creatively adjust their pose, expression, hairstyle, and clothing to fit the theme naturally.`
+### 2. Model (KOL/USER PROVIDED)
+- **SOURCE:** Use the provided "Model Image".
+- **FIDELITY:** KEEP THE FACE EXACTLY SAME.
+- **CLOTHING:** Adjust clothing to fit the "${style}" if needed, but keep it high-fashion/premium.
+${interactionRules}`
         : `
-### 2. Model (KOL)
-- **Action:** Generate a new, professional, and photorealistic **${modelDescription}**.
-- **Context:** The generated model's appearance and style must be perfectly suited to the product and the overall theme: "${style}".
-- **Style:** The model should look natural, engaging, and appealing to the target audience.`;
+### 2. Model (AI GENERATED)
+- **ACTION:** Generate a ${modelDescription}.
+- **APPEARANCE:** Skin texture must be realistic (pores, fuzz), not waxy or plastic.
+- **POSE:** Professional modeling pose.
+${interactionRules}`;
 
-    // Dynamically build the input list based on available assets
     const inputList = [];
     if (modelImage) inputList.push("- Model Image");
     inputList.push("- Product Image");
@@ -105,56 +223,47 @@ export const generateBrandedImage = async (
     const inputImagesList = inputList.join('\n');
     
     const logoInstruction = logoImage ? `
-### 4. Logo
-- The "Logo Image" **MUST** be placed in the **top-left corner**.
-- The logo must be placed cleanly, without its original background.` : '';
+### 4. Logo (BRANDING)
+- **PLACEMENT:** "Logo Image" MUST be in the **TOP-LEFT CORNER**.
+- **TREATMENT:** Remove background. Add a subtle drop shadow if needed for visibility against bright backgrounds.
+- **INTEGRITY:** Do not warp or distort.
+` : '';
 
     const qualityInstruction = `
-### 5. Image Quality
-- **Resolution:** Render the final image in the highest possible fidelity, corresponding to **${quality}** quality. Focus on sharp details, realistic textures, and professional-grade clarity.`;
+### 5. RENDER QUALITY
+- **OUTPUT:** Photorealistic, 8k resolution, Unreal Engine 5 render style.
+- **DETAILS:** Sharp focus on the product. Soft fall-off in the background.
+`;
     
     const textInstruction = overlayText ? `
-### 6. Overlay Text (CRITICAL FIDELITY REQUIREMENT)
-- **Source Text:** The following string **MUST** be rendered exactly as written, without any character substitution or omission.
-  - **TEXT:** "${overlayText}"
-- **Language & Font Mandate:** This is **Vietnamese** text. You **MUST** use a high-quality, professional font (such as Arial, Helvetica, or a similar clean sans-serif) that has **100% full support for Vietnamese diacritics (dấu)**. The rendering of accented characters (e.g., ă, â, đ, ê, ô, ơ, ư, à, á, ạ, ả, ã) must be perfect. Any font that cannot render these characters correctly is forbidden.
-- **Integrity:** The text is a core part of the design. Do not misspell, alter, or omit any part of it.
-- **Placement Rule:** Intelligently place the text in an open, non-distracting area of the image (e.g., a clear sky, a simple wall). The text **MUST NOT** cover the model's face or the main product.
-- **Sizing Rule:** The text block should occupy approximately 20% of the total image area.
-- **Long Text Fallback:** If the text is long and a suitable open area cannot be found, place the text block cleanly at the bottom of the image, below the model.
+### 6. TEXT OVERLAY
+- **CONTENT:** "${overlayText}"
+- **FONT:** Sans-serif, modern, clean (Helvetica-like).
+- **PLACEMENT:** Negative space (empty area), ensuring readability. NEVER cover the face or product.
 ` : '';
 
     const sizeInstruction = productDimensions ? `
-### 7. Real-World Product Dimensions (MANDATORY PHYSICS & SCALE)
-- **User Specified Dimensions:** The user has explicitly stated the product's physical size is: "${productDimensions}".
-- **Scaling Requirement:** You **MUST** scale the product in the generated image to perfectly match these real-world dimensions relative to the human model and the environment.
-- **Logic:** 
-  - If the size is small (e.g., "5cm", "handheld"), it should fit naturally in a hand or look small on a table. 
-  - If the size is large (e.g., "1 meter"), it should appear large.
-  - **Override:** Disregard any previous sizing assumptions. This dimension is the absolute truth.
-- **Perspective:** Ensure the depth of field and perspective respect this object size.
+### 7. SCALE & PHYSICS
+- **TRUE SIZE:** The product is "${productDimensions}".
+- **SCALING:** Adjust the size relative to the model/environment to look physically accurate based on this dimension.
 ` : '';
 
     const prompt = `
-**[-- PRIMARY RENDER DIRECTIVE --]**
+**[-- TECHNICAL REQUIREMENT --]**
 **ASPECT RATIO: ${aspectRatio}**
-This directive is the highest priority. The final output image geometry **MUST** match this aspect ratio exactly.
-- If '1:1', the image must be a perfect square (e.g., 4096x4096).
-- If '16:9', the image must be wide landscape (e.g., 4096x2304).
-- If '9:16', the image must be tall portrait (e.g., 2304x4096).
-This is a non-negotiable technical requirement. Failure to adhere to this will result in a failed task.
-**[-- END DIRECTIVE --]**
+Output image geometry must match this ratio exactly.
+**[-- END REQUIREMENT --]**
 
-You are a world-class AI art director creating a single, stunning, promotional image. Follow these instructions precisely.
+${luxuryMandate}
 
-### 1. Scene & Style
-- Create a visually stunning background scene that perfectly embodies the theme: "${style}".
+${contextInstruction}
 
 ${modelInstruction}
 
-### 3. Product
-- If the "Product Image" contains packaging, digitally unbox it and use **ONLY the product itself**.
-- The product in the final image **MUST BE a LOCKED, UNEDITABLE, PIXEL-PERFECT ELEMENT**. It must be an exact, unaltered representation of the original product. Do not redraw, embellish, or change it. Treat it as a pre-rendered asset to be perfectly composited into the scene.
+### 3. Product (THE HERO)
+- **SOURCE:** Use "Product Image".
+- **TREATMENT:** The product must look pristine. If it has packaging, unbox it digitally if the style demands it, or keep it if it's premium packaging.
+- **INTEGRATION:** Lighting on the product must match the scene lighting perfectly.
 
 ${logoInstruction}
 
@@ -162,13 +271,10 @@ ${qualityInstruction}
 ${textInstruction}
 ${sizeInstruction}
 
-
-**Input Assets Provided:**
+**Input Assets:**
 ${inputImagesList}
 
-Combine all elements into one cohesive, beautiful, professional image.
-
-**Final Confirmation:** Acknowledge and apply the **ASPECT RATIO: ${aspectRatio}** directive.
+Create a masterpiece.
     `;
 
 
